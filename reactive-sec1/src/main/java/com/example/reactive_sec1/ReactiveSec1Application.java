@@ -1,5 +1,7 @@
 package com.example.reactive_sec1;
 
+import com.example.reactive_sec1.assignments.assignment1.FileReaderService;
+import com.example.reactive_sec1.assignments.assignment1.FileReaderServiceImpl;
 import com.example.reactive_sec1.common.ConcreteHttpClient;
 import com.example.reactive_sec1.common.Util;
 import com.example.reactive_sec1.helper.CountryGenerator;
@@ -14,10 +16,13 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
+import java.util.function.UnaryOperator;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
@@ -27,7 +32,7 @@ public class ReactiveSec1Application {
 
 	public static void main(String[] args) throws InterruptedException {
 		SpringApplication.run(ReactiveSec1Application.class, args);
-		statefulFull();
+		defaultIfEmpty();
 	}
 
 	private static void demo1(){
@@ -478,7 +483,7 @@ public class ReactiveSec1Application {
 		Flux.<String>generate(synchronousSink -> {
 			/*
 				here the flux generate is stateless
-				it generates a new value of country, whenevere the stream starts
+				it generates a new value of country, whenever the stream starts
 				if you wanna maintain the state
 				see next method
 			 */
@@ -490,7 +495,7 @@ public class ReactiveSec1Application {
 
 	public static void statefulFull(){
 		/*
-			requirement: emit 10 countries, stop when the counter reacher 10
+			requirement: emit 10 countries, stop when the counter reaches 10
 			or the country name is canada
 		 */
 		Flux.generate(
@@ -506,4 +511,264 @@ public class ReactiveSec1Application {
 				}
 		).subscribe(Util.subscriber());
 	}
+
+	public static void assignment1(){
+		var path = Path.of("C:\\Users\\hp\\Documents\\projects\\reactive\\reactive-sec1\\file.txt");
+		var readerService = new FileReaderServiceImpl();
+		readerService.read(path)
+				//.take(8)
+				.takeUntil(s->s.equalsIgnoreCase("line8"))
+				.subscribe(Util.subscriber());
+
+	}
+
+	public static void handle(){
+		/*
+			if number is 1, then send 2
+			if number is 4, don't send it
+			if number is 7, error
+		 */
+
+		var flux = Flux.range(1,10)
+				.filter(x->x!=7);
+		var flux1 = flux.handle((item,sink) ->{
+			switch (item){
+				case 1 -> sink.next(-2);
+				case 4 -> {}
+				case 7 -> sink.error(new RuntimeException("Exception"));
+				default -> sink.next(item);
+			}
+		});
+		flux1.subscribe(Util.subscriber());
+	}
+
+	public static void handle2(){
+		var flux = Flux.<String>generate(synchronousSink -> {
+			String country = Util.faker().country().name();
+			synchronousSink.next(country);
+		});
+		var flux1 = flux.handle((country,sink) ->{
+			sink.next(country);
+			if(country.equalsIgnoreCase("canada")){
+				sink.complete();
+			}
+		});
+		flux1.subscribe(Util.subscriber());
+	}
+
+	public static void doHooksAndCallbacks(){
+		Flux.<Integer>create(fluxSink -> {
+					log.info("producer begins");
+					for (int i = 0; i < 4; i++) {
+						fluxSink.next(i);
+					}
+					fluxSink.complete();
+					// fluxSink.error(new RuntimeException("oops"));
+					log.info("producer ends");
+				})
+				.doOnComplete(() -> log.info("doOnComplete-1"))
+				.doFirst(() -> log.info("doFirst-1"))
+				.doOnNext(item -> log.info("doOnNext-1: {}", item))
+				.doOnSubscribe(subscription -> log.info("doOnSubscribe-1: {}", subscription))
+				.doOnRequest(request -> log.info("doOnRequest-1: {}", request))
+				.doOnError(error -> log.info("doOnError-1: {}", error.getMessage()))
+				.doOnTerminate(() -> log.info("doOnTerminate-1")) // complete or error case
+				.doOnCancel(() -> log.info("doOnCancel-1"))
+				.doOnDiscard(Object.class, o -> log.info("doOnDiscard-1: {}", o))
+				.doFinally(signal -> log.info("doFinally-1: {}", signal)) // finally irrespective of the reason
+				// .take(2)
+				.doOnComplete(() -> log.info("doOnComplete-2"))
+				.doFirst(() -> log.info("doFirst-2"))
+				.doOnNext(item -> log.info("doOnNext-2: {}", item))
+				.doOnSubscribe(subscription -> log.info("doOnSubscribe-2: {}", subscription))
+				.doOnRequest(request -> log.info("doOnRequest-2: {}", request))
+				.doOnError(error -> log.info("doOnError-2: {}", error.getMessage()))
+				.doOnTerminate(() -> log.info("doOnTerminate-2")) // complete or error case
+				.doOnCancel(() -> log.info("doOnCancel-2"))
+				.doOnDiscard(Object.class, o -> log.info("doOnDiscard-2: {}", o))
+				.doFinally(signal -> log.info("doFinally-2: {}", signal)) // finally irrespective of the reason
+				//.take(4)
+				.subscribe(Util.subscriber("subscriber"));
+	}
+
+	public static void delay(){
+		Flux.range(1,10)
+				.delayElements(Duration.ofSeconds(1))
+				.subscribe(Util.subscriber());
+		Util.sleepThread(12);
+	}
+
+	public static void subscribe(){
+		Flux.range(1,10)
+				.doOnNext(x-> log.info("RECIEVED ITEM: {}",x))
+				.doOnComplete(()-> log.info("COMPLETED"))
+				.doOnError(error-> log.info("ERROR: {}", error.getMessage()))
+				.subscribe();
+	}
+
+	public static void onErrorReturn(){
+		Flux.range(1,10)
+				.map(x-> x==5? x/0:x)
+			//	.onErrorReturn(-1) // in case of error, return -1
+				.onErrorReturn(ArithmeticException.class,-1)// in case of exception specified, return -1
+				.subscribe(Util.subscriber());
+	}
+
+	public static void onErrorResume(){
+		Mono.error(new RuntimeException("Exception"))
+				.onErrorResume(ArithmeticException.class,ex->fallBack()) // in case of error caused specifically by that exception, call the fallback() methdo
+				.onErrorResume(ex-> fallBack1()) // if any kind of error happens, call the fallback1() method
+				.onErrorReturn(-2) // if fallback2() fails, then it will return -2
+				.subscribe(Util.subscriber());
+
+		// fallback service
+
+	}
+
+	public static Mono<Integer> fallBack(){
+		return Mono.fromSupplier(() -> Util.faker().random().nextInt(6,100));
+	}
+
+	public static Mono<Integer> fallBack1(){
+		return Mono.error(new RuntimeException("Exception"));
+	}
+
+	public static void onErrorComplete(){
+		// Either give me the value or complete, don't ever give me an error!
+		Mono.error(new RuntimeException("Exception"))
+				.onErrorComplete()
+				.subscribe(Util.subscriber());
+	}
+
+	public static void onErrorContinue(){
+		/*
+			In case, you wanna proceed onto the next emitted items,
+			even in the presence of error.
+			Skip the error and proceed further
+		 */
+
+		Flux.range(1,10)
+				.map(x-> x==5? x/0:x)
+				.onErrorContinue((ex,obj)->log.info("ERROR :{} CAUSED BY ITEM: {}",ex.getMessage(),obj))
+				.subscribe(Util.subscriber());
+	}
+
+	public static void defaultIfEmpty(){
+		Mono.empty()
+				.defaultIfEmpty(4)
+				.subscribe(Util.subscriber());
+
+		Flux.range(1,10)
+				.filter(x-> x>11)
+				.defaultIfEmpty(4)
+				.subscribe(Util.subscriber());
+	}
+
+	public static void switchIfEmpty(){
+		Flux.range(1,10)
+				.filter(x-> x>11)
+				.switchIfEmpty(fallBack4())
+				.subscribe(Util.subscriber());
+
+	}
+
+	public static Flux<Integer> fallBack4(){
+		return Flux.range(100,3);
+	}
+
+	public static void timeout(){
+		getProductName()
+				.timeout(Duration.ofSeconds(1))
+				.onErrorReturn("Fallback Value")
+				.subscribe(Util.subscriber());
+		Util.sleepThread(5);
+
+
+		getProductName()
+		.timeout(Duration.ofSeconds(1),fallBack5())
+				.subscribe(Util.subscriber());
+	}
+
+	public static Mono<String> getProductName(){
+		return Mono.fromSupplier(()-> "service: "  +Util.faker().commerce().productName())
+				.delayElement(Duration.ofSeconds(3));
+	}
+
+	public static Mono<String> fallBack5(){
+		return Mono.fromSupplier(()-> "fallback service: "  +Util.faker().commerce().productName())
+				.delayElement(Duration.ofSeconds(3));
+	}
+
+	public static void multipleTimeouts(){
+		var mono = getProductName().timeout(Duration.ofSeconds(1),fallBack5());
+
+		mono.timeout(Duration.ofMillis(200),fallBack5())
+				.subscribe(Util.subscriber());
+		/*
+		 	The closest timeout to the subscriber is the one that's gonna work!
+		 	The value of the timeout closer to the sub has always to be less than
+		 	the duration of timeout closer to the producer
+		 */
+	}
+
+	record Customer(int id, String name){}
+	record Order(String productName, int price, int quantity){}
+
+	public static Flux<Customer> customerFlux(){
+		return Flux.range(1,3)
+				.map(x-> new Customer(x,Util.faker().name().fullName()));
+	}
+
+	public static Flux<Order> orderFlux(){
+		return Flux.range(1,3)
+				.map(x-> new Order(Util.faker().commerce().productName(),Integer.parseInt(Util.faker().commerce().price(9,100)),x));
+	}
+
+	public static void withoutTransform(){
+		customerFlux()
+				.doOnNext(customer-> log.info("CUSTOMER WITH ID: {}", customer.id))
+				.doOnComplete(() -> log.info("COMPLETED"))
+				.doOnError(error -> log.info("ERROR: {}", error.getMessage()))
+				.subscribe(Util.subscriber());
+
+		orderFlux()
+				.doOnNext(order-> log.info("ORDER WITH PRODUCT NAME: {}", order.productName))
+				.doOnComplete(() -> log.info("COMPLETED"))
+				.doOnError(error -> log.info("ERROR: {}", error.getMessage()))
+				.subscribe(Util.subscriber());
+
+		/*
+			Both pipeline share the same doOnComplete() and doOnError() logic (debugger helpers)
+			see how to write reusable reactive logic for both pipelines in the next method
+		 */
+	}
+
+	private static <T> UnaryOperator<Flux<T>> addDebugger(){
+			return flux -> flux
+					.doOnComplete(() -> log.info("COMPLETED"))
+					.doOnError(error -> log.info("ERROR: {}", error.getMessage()));
+	}
+
+	public static void withTransform(){
+		customerFlux()
+				.doOnNext(customer-> log.info("CUSTOMER WITH ID: {}", customer.id))
+				.transform(addDebugger())
+				.subscribe(Util.subscriber());
+
+		orderFlux()
+				.doOnNext(order-> log.info("ORDER WITH PRODUCT NAME: {}", order.productName))
+				.transform(addDebugger())
+				.subscribe(Util.subscriber());
+	}
+
+
+	public static void withTransform1(){
+		var debuggerEnabled = false;
+		customerFlux()
+				.doOnNext(customer-> log.info("CUSTOMER WITH ID: {}", customer.id))
+				.transform(debuggerEnabled?addDebugger(): Function.identity()) // if debugger enabled, then add it, else, return flux as it is
+				.subscribe(Util.subscriber());
+	}
+
+
 }
