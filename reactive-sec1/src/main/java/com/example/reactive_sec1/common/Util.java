@@ -26,4 +26,12 @@ public class Util {
             throw new RuntimeException(e);
         }
     }
+
+    public static void sleepThreadMillis(int milliseconds) {
+        try {
+            Thread.sleep(Duration.ofMillis(milliseconds));
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
 }

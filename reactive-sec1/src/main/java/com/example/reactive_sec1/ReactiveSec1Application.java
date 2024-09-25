@@ -14,6 +14,7 @@ import org.apache.logging.log4j.util.PropertySource;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
@@ -34,7 +35,7 @@ public class ReactiveSec1Application {
 
 	public static void main(String[] args) throws InterruptedException {
 		SpringApplication.run(ReactiveSec1Application.class, args);
-		defaultIfEmpty();
+		fixedBufferSizeStrategy();
 	}
 
 	private static void demo1(){
@@ -1001,6 +1002,273 @@ public class ReactiveSec1Application {
 		Util.sleepThread(1);
 		return i*2;
 	}
+
+	public static void automaticBackPressure(){
+		var producer = Flux.generate(
+				() ->1,
+				(state,sink)->{
+					log.info("GENERATING: {}",state);
+					sink.next(state);
+					return ++state;
+				}
+		).cast(Integer.class);
+
+		producer.publishOn(Schedulers.boundedElastic())
+				.map(ReactiveSec1Application::timeConsumingTask)
+				.subscribe(Util.subscriber());
+		Util.sleepThread(60);
+
+		/*
+			The main thread gonna stop producing items at item 256
+			Then he will give responsibility to the other thread to
+			give the subscriber the emitted items
+			The publisher after emitting 256 items, gonna wait for the consumer
+			to slowly catch-up(1 sec to map an item).
+		 */
+	}
+
+	private static int timeConsumingTask(int i){
+		Util.sleepThread(1);
+		return i;
+	}
+
+	public static void automaticBackPressure2(){
+		var producer = Flux.generate(
+				() ->1,
+				(state,sink)->{
+					log.info("GENERATING: {}",state);
+					sink.next(state);
+					return ++state;
+				}
+		).cast(Integer.class)
+				.subscribeOn(Schedulers.parallel());
+
+		producer.publishOn(Schedulers.boundedElastic())
+				.map(ReactiveSec1Application::timeConsumingTask)
+				.subscribe(Util.subscriber());
+		Util.sleepThread(60);
+
+		/*
+			The parallel thread gonna stop producing items at item 256
+			Then he will give responsibility to the other thread(boundedElastic) to
+			give the subscriber the emitted items
+			The publisher after emitting 256 items, gonna wait for the consumer
+			to slowly catch-up(1 sec to map an item).
+			If you want the producer to produce, for example, 16 items then passes
+			the responsibility to the other thread, add the following statement in the main method
+			System.setProperty("reactor.bufferSize.small","16");
+			The producer after producing 16 items, will stop.
+			After consuming 75% of the items by the consumer, the producer will start
+			production process again.
+			So after consuming item number 12 by the consumer, the producer gonna start
+			producing items starting from number 17.
+			After generating 16 items again, that is, 28 items, the consumer gonna start
+			consuming items starting with item number 13.
+		 */
+
+	}
+
+	public static void limitRate(){
+		var producer = Flux.generate(
+						() ->1,
+						(state,sink)->{
+							log.info("GENERATING: {}",state);
+							sink.next(state);
+							return ++state;
+						}
+				).cast(Integer.class)
+				.subscribeOn(Schedulers.parallel());
+
+		producer.limitRate(5) //we tell the producer don't produce more than 5 items before I consume
+				.publishOn(Schedulers.boundedElastic())
+				.map(ReactiveSec1Application::timeConsumingTask)
+				.subscribe(Util.subscriber());
+		Util.sleepThread(60);
+
+		/*
+			The producer after producing 5 items, will stop.
+			After consuming 75% of the items by the consumer, the producer will start
+			production process again.
+			So after consuming item number 3 by the consumer, the producer gonna start
+			producing items starting from number 6.
+		 */
+	}
+
+	public static void backPressureMultipleSubs(){
+		var producer = Flux.generate(
+						() ->1,
+						(state,sink)->{
+							log.info("GENERATING: {}",state);
+							sink.next(state);
+							return ++state;
+						}
+				).cast(Integer.class)
+				.subscribeOn(Schedulers.parallel());
+
+		producer.limitRate(5)
+				.publishOn(Schedulers.boundedElastic())
+				.map(ReactiveSec1Application::timeConsumingTask)
+				.subscribe(Util.subscriber("sub1"));
+
+		producer
+				.take(50)
+				.publishOn(Schedulers.boundedElastic())
+				.subscribe(Util.subscriber("sub2"));
+
+		Util.sleepThread(60);
+
+		/*
+			The sub2 will receive his items as fast as the producer at producing them
+			After that, the sub1 gonna start receiving his items starting from 1.
+			The moment he reaches 3, the producer gonna start producing again
+		 */
+	}
+
+	public static void fluxCreateBackPressureHandling(){
+		var producer = Flux.create(fluxSink -> {
+			for(int i=1;i<=500 && !fluxSink.isCancelled();i++){
+				log.info("GENERATING: {}", i);
+				fluxSink.next(i);
+				Util.sleepThreadMillis(50);
+			}
+			fluxSink.complete();
+		}).cast(Integer.class).subscribeOn(Schedulers.parallel());
+
+		producer
+				.publishOn(Schedulers.boundedElastic())
+				.map(ReactiveSec1Application::timeConsumingTask1)
+				.subscribe();
+
+		Util.sleepThread(60);
+
+		/*
+			producer speed is 20 items per second
+			consumer processing speed is 1 item per second
+
+		 */
+	}
+
+	private static int timeConsumingTask1(int i){
+		log.info("RECEIVED ITEM: {}",i);
+		Util.sleepThread(1);
+		return i;
+	}
+
+	public static void bufferStrategy(){
+		var producer = Flux.create(fluxSink -> {
+			for(int i=1;i<=500 && !fluxSink.isCancelled();i++){
+				log.info("GENERATING: {}", i);
+				fluxSink.next(i);
+				Util.sleepThreadMillis(50);
+			}
+			fluxSink.complete();
+		}).cast(Integer.class).subscribeOn(Schedulers.parallel());
+
+		producer
+				.onBackpressureBuffer() // now the consumer will be able to receive an item per second
+				.publishOn(Schedulers.boundedElastic())
+				.map(ReactiveSec1Application::timeConsumingTask1)
+				.subscribe();
+
+		Util.sleepThread(60);
+	}
+
+	public static void errorStrategy(){
+		var producer = Flux.create(fluxSink -> {
+			for(int i=1;i<=500 && !fluxSink.isCancelled();i++){
+				log.info("GENERATING: {}", i);
+				fluxSink.next(i);
+				Util.sleepThreadMillis(50);
+			}
+			fluxSink.complete();
+		}).cast(Integer.class).subscribeOn(Schedulers.parallel());
+
+		producer
+				.onBackpressureError() // throw an error when consumer is too slow to catch up
+				.publishOn(Schedulers.boundedElastic())
+				.map(ReactiveSec1Application::timeConsumingTask1)
+				.subscribe();
+
+		Util.sleepThread(60);
+	}
+
+	public static void fixedBufferSizeStrategy(){
+		var producer = Flux.create(fluxSink -> {
+			for(int i=1;i<=500 && !fluxSink.isCancelled();i++){
+				log.info("GENERATING: {}", i);
+				fluxSink.next(i);
+				Util.sleepThreadMillis(50);
+			}
+			fluxSink.complete();
+		}).cast(Integer.class).subscribeOn(Schedulers.parallel());
+
+		producer
+				.onBackpressureBuffer(10) // if the producer generated more items than bufferSize+number of items consumer, it will throw and error
+				.publishOn(Schedulers.boundedElastic())
+				.map(ReactiveSec1Application::timeConsumingTask1)
+				.subscribe();
+
+		Util.sleepThread(60);
+	}
+
+	public static void dropStrategy(){
+		var producer = Flux.create(fluxSink -> {
+			for(int i=1;i<=500 && !fluxSink.isCancelled();i++){
+				log.info("GENERATING: {}", i);
+				fluxSink.next(i);
+				Util.sleepThreadMillis(50);
+			}
+			fluxSink.complete();
+		}).cast(Integer.class).subscribeOn(Schedulers.parallel());
+
+		producer
+				//.onBackpressureDrop()
+				.onBackpressureLatest()
+				.publishOn(Schedulers.boundedElastic())
+				.map(ReactiveSec1Application::timeConsumingTask1)
+				.subscribe();
+
+		Util.sleepThread(60);
+
+		/*
+			If the consumer requested 2 items, and the producer produced 20 items
+			the monitor gonna take 2 items from the producer
+			and drop the remaining items(18)
+		 */
+		/*
+			with lastest strategy,
+			If the consumer requested 2 items, and the producer produced 20 items
+			the monitor gonna take 3 items from the producer
+			 and gonna keep the lastest item
+			and drop the remaining items(17)
+			so instead of giving item number 2 next time, it will give him item number 19
+		 */
+	}
+
+	public static void oneStrategyForAllSubs(){
+		var producer = Flux.create(fluxSink -> {
+			for(int i=1;i<=500 && !fluxSink.isCancelled();i++){
+				log.info("GENERATING: {}", i);
+				fluxSink.next(i);
+				Util.sleepThreadMillis(50);
+			}
+			fluxSink.complete();
+		}, FluxSink.OverflowStrategy.BUFFER)//now bufferStrategy gonna be shared among all subs.
+				.cast(Integer.class)
+				.subscribeOn(Schedulers.parallel());
+
+		producer
+				//.onBackpressureDrop()
+				.onBackpressureLatest()
+				.publishOn(Schedulers.boundedElastic())
+				.map(ReactiveSec1Application::timeConsumingTask1)
+				.subscribe();
+
+		Util.sleepThread(60);
+	}
+
+
+
 
 
 }
