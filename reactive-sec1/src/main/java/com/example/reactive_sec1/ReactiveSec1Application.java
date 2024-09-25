@@ -771,4 +771,90 @@ public class ReactiveSec1Application {
 	}
 
 
+	public static void moviestream(){
+		Flux<String> flux = Flux.generate(
+				() -> {
+					log.info("RECIEVED REQUEST");
+					return 1;
+				},
+				(state,sink)-> {
+					var scene = "MOVIE SCENE " + state;
+					log.info("PLAYING SCENE: {}", scene);
+					sink.next(scene);
+					return ++state;
+				}
+		).take(10).delayElements(Duration.ofSeconds(1))
+				.cast(String.class)
+				.share(); // MAKE THE PUBLISHER HOT
+			//  .publish().refCount(1) it needs at least 1 sub to emit the data
+			//  .publish().autoConnect()  The movie won't start unless a sub joins the theater,when both sub1 and sub2 leave, the movie gonna keep playing.
+			//  .publish().autoConnect(0) The movie neither will wait for subs to join nor will stop playing after they leave
+		Util.sleepThread(2);
+		flux.subscribe(Util.subscriber("SUB1"));
+
+		Util.sleepThread(3);
+		flux
+				.take(3)
+				//Now SUB2 is going to watch only 3 scenes,
+				// that won't affect SUB1 number of requests
+				// As long there's a sub, the movie gonna keep playing
+				// if publish()refCount() was set to 2,
+				//that is, it's needed at least 2 subs to emit the data
+				// the publisher gonna wait UNTIL sub2 joins to start emitting data
+				//the moment any sub leaves between these two, the publisher
+				// gonna stop generating data
+				.subscribe(Util.subscriber("SUB2"));
+
+		Util.sleepThread(15);
+
+		/*
+			SUB1 will receive the request, then watch 3 scenes
+			That is, 3 seconds, passed. SUB2 will join and the
+			publisher receive the request
+			By the time SUB1 is watching scene 4, SUB2 is watching
+			scene 2.
+			They're like netflix. COLD PUBLISHER
+			To make it like a movie theater
+			That is, whenever SUB2 joins, he will be watching the same
+			scene as SUB1.
+			To do that add .share() to the flux.
+
+		 */
+	}
+
+	public static void stockStream(){
+		var flux = Flux.generate(synchronousSink -> {
+			synchronousSink.next(Util.faker().random().nextInt(10,100));
+		}).delayElements(Duration.ofSeconds(3))
+				.doOnNext(price->log.info("EMITTING PRICE: {}", price))
+				.publish().autoConnect(0);
+			  //.replay(10).autoConnect(0);
+
+		Util.sleepThread(4);
+		log.info("SAM JOINING");
+		flux.subscribe(Util.subscriber("SAM"));
+
+		Util.sleepThread(4);
+		log.info("MIKE JOINING");
+		flux.subscribe(Util.subscriber("MIKE"));
+
+		Util.sleepThread(15);
+
+		/*
+			3 secs passed, and first price emitted
+			1 sec after, SAM joins
+			SAM won't be able to receive the past price
+			He won't be able to know the CURRENT price
+			until 2 secs passes, then he will receive his 1st price
+			To make SUM see the current or past scores the moment he joins
+			Replace publish().autoConnect(0) with replay().autoConnect(0)
+			if You wanna make sure SAM knows for example the last 10 price values
+			then replay(10).autoConnect(0)
+		 */
+
+
+	}
+
+
+
 }
