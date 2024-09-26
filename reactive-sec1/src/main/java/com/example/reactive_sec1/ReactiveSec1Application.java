@@ -1,8 +1,7 @@
 package com.example.reactive_sec1;
 
-import com.example.reactive_sec1.assignments.assignment1.FileReaderService;
 import com.example.reactive_sec1.assignments.assignment1.FileReaderServiceImpl;
-import com.example.reactive_sec1.assignments.assignment4.UserInformationService;
+import com.example.reactive_sec1.assignments.assignment5.vinoth.BookService;
 import com.example.reactive_sec1.common.ConcreteHttpClient;
 import com.example.reactive_sec1.common.Util;
 import com.example.reactive_sec1.examples.flatmap.OrderService;
@@ -19,13 +18,12 @@ import com.example.reactive_sec1.publisher.PublisherImpl;
 import com.example.reactive_sec1.publisher.SubscriptionImpl;
 import com.example.reactive_sec1.subscriber.SubscriberImpl;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.logging.log4j.util.PropertySource;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
+import reactor.core.publisher.GroupedFlux;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
 import java.nio.file.Path;
@@ -44,7 +42,7 @@ public class ReactiveSec1Application {
 
 	public static void main(String[] args) throws InterruptedException {
 		SpringApplication.run(ReactiveSec1Application.class, args);
-		new UserInformationService().buildUserInformation();
+		new com.example.reactive_sec1.assignments.assignment6.mine.OrderService().createOrderFlux();
 	}
 
 	private static void demo1(){
@@ -1520,5 +1518,144 @@ public class ReactiveSec1Application {
 		return Mono.fromRunnable(()->log.info("ALL RECORDS ARE SAVED SUCCESSFULLY: {}",records));
 	}
 
+	public static void buffer(){
+		var eventStream = Flux.interval(Duration.ofMillis(200))
+				.take(10)
+				.map(x-> "EVENT: " + x);
+		eventStream
+				.buffer() // Collect all as a list
+				.subscribe(Util.subscriber());
+		Util.sleepThread(60);
 
+		/*
+			Running the above, will print the following
+			Anonymous RECEIVED ITEM: [EVENT: 0, EVENT: 1, EVENT: 2, EVENT: 3, EVENT: 4, EVENT: 5, EVENT: 6, EVENT: 7, EVENT: 8, EVENT: 9]
+		 */
+	}
+
+	public static void buffer1(){
+		var eventStream = Flux.interval(Duration.ofMillis(200))
+				.take(10)
+				.map(x-> "EVENT: " + x);
+		eventStream
+				.buffer(3) // Collect every 3 items
+				// each rime, he generates a util.List that contains 3 items
+				.subscribe(Util.subscriber());
+		Util.sleepThread(60);
+
+		/*
+			Running the above, will print the following
+			Anonymous RECEIVED ITEM: [EVENT: 0, EVENT: 1, EVENT: 2]
+			Anonymous RECEIVED ITEM: [EVENT: 3, EVENT: 4, EVENT: 5]
+			Anonymous RECEIVED ITEM: [EVENT: 6, EVENT: 7, EVENT: 8]
+			Anonymous RECEIVED ITEM: [EVENT: 9]
+			COMPLETED! FOR Anonymous
+		 */
+	}
+
+	public static void buffer2(){
+		var eventStream = Flux.interval(Duration.ofMillis(200))
+				.take(10)
+				.map(x-> "EVENT: " + x);
+		eventStream
+				.buffer(Duration.ofMillis(500)) // Collect every 500ms
+				.subscribe(Util.subscriber());
+		Util.sleepThread(60);
+
+		/*
+			Running the above, will print the following
+			Anonymous RECEIVED ITEM: [EVENT: 0, EVENT: 1]
+			Anonymous RECEIVED ITEM: [EVENT: 2, EVENT: 3]
+			Anonymous RECEIVED ITEM: [EVENT: 4, EVENT: 5EVENT: 6]
+			Anonymous RECEIVED ITEM: [EVENT: 7, EVENT: 8]
+			Anonymous RECEIVED ITEM: [EVENT: 9]
+			COMPLETED! FOR Anonymous
+		 */
+	}
+
+	public static void buffer3(){
+		var eventStream = Flux.interval(Duration.ofMillis(200))
+				.take(10)
+				.concatWith(Flux.never()) // doesn't emit anything
+				.map(x-> "EVENT: " + x);
+		eventStream
+				.buffer(3) // Collect every 3
+				.subscribe(Util.subscriber());
+		Util.sleepThread(60);
+
+		/*
+			Running the above, will print the following
+			Anonymous RECEIVED ITEM: [EVENT: 0, EVENT: 1, EVENT: 2]
+			Anonymous RECEIVED ITEM: [EVENT: 3, EVENT: 4, EVENT: 5]
+			Anonymous RECEIVED ITEM: [EVENT: 6, EVENT: 7, EVENT: 8]
+
+			it will never complete, it keeps waiting for the 9th Event
+			The solution is in the nest method
+		 */
+	}
+
+	public static void buffer4(){
+		var eventStream = Flux.interval(Duration.ofMillis(200))
+				.take(10)
+				.concatWith(Flux.never()) // doesn't emit anything
+				.map(x-> "EVENT: " + x);
+		eventStream
+				.bufferTimeout(3,Duration.ofSeconds(1)) // Collect every 3 and don't wait for more than one second
+				.subscribe(Util.subscriber());
+		Util.sleepThread(60);
+
+		/*
+			Running the above, will print the following
+			Anonymous RECEIVED ITEM: [EVENT: 0, EVENT: 1, EVENT: 2]
+			Anonymous RECEIVED ITEM: [EVENT: 3, EVENT: 4, EVENT: 5]
+			Anonymous RECEIVED ITEM: [EVENT: 6, EVENT: 7, EVENT: 8]
+			Anonymous RECEIVED ITEM: [EVENT: 9]
+			COMPLETED! FOR Anonymous
+		 */
+	}
+
+	public static void window(){
+		Flux.interval(Duration.ofMillis(200))
+				.map(x-> "EVENT-" + x)
+				.window(5) // It will open a flux for every 5 item
+			//	.window(Duration.ofMillis(2000)) // it open a flux for every 2 secs
+				.flatMap(ReactiveSec1Application::processFlux)
+				.subscribe();
+
+		Util.sleepThread(60);
+
+		/*
+			Running the above will print the following:
+			*****
+			*****
+			*****
+			*****
+			*****
+			.
+			.
+			.
+			*****
+		 */
+	}
+
+	private static Mono<Void> processFlux(Flux<String> innerFlux){
+		return innerFlux.doOnNext(e-> System.out.print("*"))
+				.doOnComplete(System.out::println)
+				.then();
+	}
+
+	public static void groupBy(){
+		Flux.range(1,30)
+				.delayElements(Duration.ofMillis(1000))
+				.groupBy(i->i%2) //Group by number parity, either 0 or 1
+				.flatMap(x -> processEvents(x))
+				.subscribe();
+		Util.sleepThread(60);
+	}
+
+	private static Mono<Void> processEvents(GroupedFlux<Integer,Integer> flux){
+		log.info("RECEIVED GROUPED FLUX FOR KEY: {}", flux.key());
+		return flux.doOnNext(item -> log.info("RECEIVED ITEM: {} FOR KEY {}",item,flux.key()))
+				.then();
+	}
 }
