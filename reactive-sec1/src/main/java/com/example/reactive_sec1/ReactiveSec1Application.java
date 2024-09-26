@@ -25,12 +25,14 @@ import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.GroupedFlux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+import reactor.util.retry.Retry;
 
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.function.UnaryOperator;
 import java.util.stream.IntStream;
@@ -1658,4 +1660,85 @@ public class ReactiveSec1Application {
 		return flux.doOnNext(item -> log.info("RECEIVED ITEM: {} FOR KEY {}",item,flux.key()))
 				.then();
 	}
+
+	public static void repeat(){
+		var mono = Mono.fromSupplier(() -> Util.faker().country().name());
+		var sub = Util.subscriber();
+		mono
+				.repeat() // Now the Mono is a FLUX!
+				// It will resubscribe again and again infinitely ONLY AFTER IT RECEIVES THE COMPLETE SIGNAL
+			//	.repeat(3) // It will resubscribe 3 more times, now the sub gonna get 4 items
+				.subscribe(sub);
+	}
+
+	public static void repeat1(){
+		var mono = Mono.fromSupplier(() -> Util.faker().country().name());
+		var sub = Util.subscriber();
+		mono
+				.repeat()
+				.takeUntil(x-> x.equalsIgnoreCase("canada"))
+				.subscribe(sub);
+	}
+
+	public static void repeat2(){
+		var atomicInteger = new AtomicInteger(0);
+		var mono = Mono.fromSupplier(() -> Util.faker().country().name());
+		var sub = Util.subscriber();
+		mono
+				.repeat(()-> atomicInteger.incrementAndGet()<3) // It will repeat until the number becomes equal to 3
+				.subscribe(sub);
+	}
+
+	public static void repeat3(){
+		var mono = Mono.fromSupplier(() -> Util.faker().country().name());
+		var sub = Util.subscriber();
+		mono
+				.repeatWhen(flux->flux.delayElements(Duration.ofSeconds(2))) // repeat after 2 secs
+				.subscribe(sub);
+	}
+
+	public static void repeat4(){
+		var mono = Mono.fromSupplier(() -> Util.faker().country().name());
+		var sub = Util.subscriber();
+		mono
+				.repeatWhen(flux->flux.delayElements(Duration.ofSeconds(2)).take(2)) // repeat at max 2 times, each one after 2 secs
+				.subscribe(sub);
+	}
+
+	public static void retry(){
+		var atomicInteger = new AtomicInteger(0);
+		var mono = Mono.fromSupplier(() -> {
+			if(atomicInteger.incrementAndGet()<3){
+				throw new RuntimeException("retry fail");
+			}
+			return Util.faker().country().name();
+		});
+		var sub = Util.subscriber();
+		mono
+			//	.retry(1) it will retry 1 more time, taht's not enough! it has to retry 2 times to return country name
+				.retry(2)
+				.subscribe(sub);
+	}
+
+	public static void retry1(){
+		var atomicInteger = new AtomicInteger(0);
+		var mono = Mono.fromSupplier(() -> {
+			if(atomicInteger.incrementAndGet()<3){
+				throw new RuntimeException("retry fail");
+			}
+			return Util.faker().country().name();
+		});
+		var sub = Util.subscriber();
+		mono
+				.retryWhen(Retry.fixedDelay(
+						2,Duration.ofSeconds(1)) // retry 2 times, 2 secs between each
+						.filter(ex-> RuntimeException.class.equals(ex.getClass())) // ONLY Retry when the error is runtime exception
+						.onRetryExhaustedThrow((spec,signal) -> signal.failure()) // Show the original exception instead of retryExhausted exception
+						.doBeforeRetry(rs-> log.info("RETRYING")))
+				.subscribe(sub);
+	}
+
+	
+
+
 }
