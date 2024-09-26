@@ -2,10 +2,19 @@ package com.example.reactive_sec1;
 
 import com.example.reactive_sec1.assignments.assignment1.FileReaderService;
 import com.example.reactive_sec1.assignments.assignment1.FileReaderServiceImpl;
+import com.example.reactive_sec1.assignments.assignment4.UserInformationService;
 import com.example.reactive_sec1.common.ConcreteHttpClient;
 import com.example.reactive_sec1.common.Util;
+import com.example.reactive_sec1.examples.flatmap.OrderService;
+import com.example.reactive_sec1.examples.flatmap.PaymentService;
+import com.example.reactive_sec1.examples.flatmap.User;
+import com.example.reactive_sec1.examples.flatmap.UserService;
+import com.example.reactive_sec1.examples.merge.Emirates;
+import com.example.reactive_sec1.examples.merge.Qatar;
+import com.example.reactive_sec1.examples.merge.Ryanair;
 import com.example.reactive_sec1.helper.CountryGenerator;
 import com.example.reactive_sec1.helper.NameGenerator;
+import com.example.reactive_sec1.helper.NameGenerator1;
 import com.example.reactive_sec1.publisher.PublisherImpl;
 import com.example.reactive_sec1.publisher.SubscriptionImpl;
 import com.example.reactive_sec1.subscriber.SubscriberImpl;
@@ -35,7 +44,7 @@ public class ReactiveSec1Application {
 
 	public static void main(String[] args) throws InterruptedException {
 		SpringApplication.run(ReactiveSec1Application.class, args);
-		fixedBufferSizeStrategy();
+		new UserInformationService().buildUserInformation();
 	}
 
 	private static void demo1(){
@@ -1267,8 +1276,249 @@ public class ReactiveSec1Application {
 		Util.sleepThread(60);
 	}
 
+	public static void startWith(){
+		var producer1 = Flux.just(1,2,3)
+				.doOnSubscribe(s-> log.info("SUBSCRIBING TO PRODUCER-1"))
+				.delayElements(Duration.ofMillis(20));
+
+		producer1
+				.startWith(0,-1)
+				.subscribe(Util.subscriber());
+
+		Util.sleepThread(2);
+
+		/*
+			The startWith() operator gonna emit 0 and -1 before emitting producer1 values
+		 */
+
+		producer1
+				.startWith(0,-1)
+				.take(2) // only 0 and -1 gonna be emitted
+				.subscribe(Util.subscriber());
+
+		producer1
+				.startWith(List.of(0,-1,-2))
+				.subscribe(Util.subscriber());
 
 
+	}
+
+	public static void startWith1(){
+		var producer1 = Flux.just(1,2,3)
+				.doOnSubscribe(s-> log.info("SUBSCRIBING TO PRODUCER-1"))
+				.delayElements(Duration.ofMillis(20));
+
+		var producer2 = Flux.just(11,12,13)
+				.doOnSubscribe(s-> log.info("SUBSCRIBING TO PRODUCER-2"))
+				.delayElements(Duration.ofMillis(20));
+
+		producer1
+				.startWith(producer2) //after 1000, will emit the producer2 items before producer1 items
+				.startWith(1000) // will emit 1000 as first element
+				.subscribe(Util.subscriber());
+
+		Util.sleepThread(2);
+
+		/*
+			The closest startWith() to the subscriber, gonna take priority
+		 */
+	}
+
+	public static void startWith2(){
+		var generator = new NameGenerator1();
+		generator.generate()
+				.take(2)
+				.subscribe(Util.subscriber("SUB1"));
+
+		generator.generate()
+				.take(3)
+				.subscribe(Util.subscriber("SUB2"));
+
+		generator.generate()
+				.take(4)
+				.subscribe(Util.subscriber("SUB3"));
+	}
+
+	public static void concatWithValues(){
+		var producer1 = Flux.just(1,2,3)
+				.doOnSubscribe(s-> log.info("SUBSCRIBING TO PRODUCER-1"))
+				.delayElements(Duration.ofMillis(20));
+
+		var producer2 = Flux.just(11,12,13)
+				.doOnSubscribe(s-> log.info("SUBSCRIBING TO PRODUCER-2"))
+				.delayElements(Duration.ofMillis(20));
+
+		producer1
+				.concatWithValues(4,5) // will emit producer1 values before emitting 4 and 5
+				.subscribe(Util.subscriber());
+
+		producer1
+				.concatWithValues(4,5) // will emit producer1 values before emitting 4 and 5
+				.take(2) // only 1 and 2 will be emitted
+				.subscribe(Util.subscriber());
+
+		producer1
+				.concatWith(producer2) // will emit producer1 values before emitting producer2 values
+				.subscribe(Util.subscriber());
+
+		/*
+			The above expression is same as below one
+		 */
+
+		Flux.concat(producer1, producer2).subscribe(Util.subscriber());
+		Util.sleepThread(2);
+	}
+
+	public static void concatWithError(){
+		var producer1 = Flux.just(1,2,3)
+				.doOnSubscribe(s-> log.info("SUBSCRIBING TO PRODUCER-1"))
+				.delayElements(Duration.ofMillis(20));
+
+		var producer2 = Flux.just(11,12,13)
+				.doOnSubscribe(s-> log.info("SUBSCRIBING TO PRODUCER-2"))
+				.delayElements(Duration.ofMillis(20));
+		var producer3 = Flux.error(new RuntimeException("oops"));
+
+		Flux.concat(producer1, producer3, producer2).subscribe(Util.subscriber());
+		// will only emit producer1 values, won't go onto the next values of producer2 because of producer3 error
+		Flux.concatDelayError(producer1, producer2, producer3).subscribe(Util.subscriber());
+		// will emit producer1 values, then producer2 values, then producer3 error
+	}
+
+	public static void merge(){
+		var producer1 = Flux.just(1,2,3)
+				.transform(Util.fluxLogger("producer-1"))
+				.delayElements(Duration.ofMillis(20));
+
+		var producer2 = Flux.just(11,12,13)
+				.transform(Util.fluxLogger("producer-2"))
+				.delayElements(Duration.ofMillis(20));
+
+		Util.sleepThread(2);
+
+		Flux.merge(producer1, producer2).subscribe(Util.subscriber());
+		// no specific order of emitted elements, the sub is subscribing to all pubs at the same time
+		// the above statement is same as below one
+
+		producer1.mergeWith(producer2).subscribe(Util.subscriber());
+	}
+
+	public static void merge1(){
+		Flux.merge(Ryanair.ryanair(), Emirates.emirates(), Qatar.qatar())
+				.take(Duration.ofSeconds(2))
+				.subscribe(Util.subscriber());
+		Util.sleepThread(3);
+	}
+
+	record Car(String body, String engine, String tires){}
+	public static void zip(){
+		var bodyFlux = Flux.range(1,5)
+				.map(x-> "body: " + x)
+				.delayElements(Duration.ofMillis(100));
+
+		var engineFlux = Flux.range(1,3)
+				.map(x-> "engine: " + x)
+				.delayElements(Duration.ofMillis(200));
+
+		var tiresFlux = Flux.range(1,10)
+				.map(x-> "tires: " + x)
+				.delayElements(Duration.ofMillis(75));
+
+		Flux.zip(bodyFlux, engineFlux, tiresFlux)
+				.map(x-> new Car(x.getT1(), x.getT2(), x.getT3()))
+				.subscribe(Util.subscriber());
+		Util.sleepThread(5);
+
+		/*
+			It will build only 3 objects, since we have only 3 engines
+			if any flux was empty, it would've built 0 objects
+		 */
+	}
+
+	public static void flatMap(){
+		/*
+			Lat's say we have
+			User Service: get User Id for Username, get All users
+			Order Service: get Orders by User Id
+			I have the username and I want the orders
+		 */
+
+		UserService.getUserId("mike")
+				.flatMap(PaymentService::getBalance)
+				.subscribe(Util.subscriber());
+		/*
+			Above, flatmap subscribes to Mono pub and emit Mono to a sub
+		 */
+
+
+		UserService.getUserId("mike")
+				.flatMapMany(OrderService::getOrders)
+				.subscribe(Util.subscriber());
+		/*
+			Here, flatMapMany subscribes to a Mono and gives a Flux
+		 */
+
+
+		/*
+			Get All Orders by Calling getAllUsers
+		 */
+
+		UserService.getAllUsers()
+				.map(User::id)
+				.flatMap(OrderService::getOrders)// It's gonna act like merge
+			//	.flatMap(OrderService::getOrders,1)// gonna make ONE concurrent request, it will finish orders of user 1 then 2 then 3
+				.subscribe(Util.subscriber());
+
+
+		Util.sleepThread(5);
+
+		/*
+			If you wanna a mapping that completes the 1st flux, then go onto the next one
+			see next Method
+		 */
+	}
+
+	public static void concatMap(){
+		UserService.getAllUsers()
+				.map(User::id)
+				.concatMap(OrderService::getOrders)//equivalent to flatMap(OrderService::getOrders,1)
+				.subscribe(Util.subscriber());
+
+
+		Util.sleepThread(5);
+	}
+
+	public static void collectList(){
+		var flux = Flux.range(1,10);
+		Mono<List<Integer>> monoList = flux.collectList();
+	}
+
+	public static void then(){
+		saveRecords(List.of("a","b","c"))
+				.then() // the pub won't publish the items, it will just emit where whether the operation is complete or not
+				.subscribe(Util.subscriber());
+
+		Util.sleepThread(5);
+	}
+
+	private static Flux<String> saveRecords(List<String> records){
+		return Flux.fromIterable(records)
+				.map(r-> "saved: " + r)
+				.delayElements(Duration.ofMillis(500));
+	}
+
+	public static void then2(){
+		var records =List.of("a","b","c");
+		saveRecords(records)
+				.then(sendNotification(records))
+				.subscribe(Util.subscriber());
+
+		Util.sleepThread(5);
+	}
+
+	private static Mono<Void> sendNotification(List<String> records){
+		return Mono.fromRunnable(()->log.info("ALL RECORDS ARE SAVED SUCCESSFULLY: {}",records));
+	}
 
 
 }
