@@ -22,6 +22,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import reactor.core.publisher.*;
 import reactor.core.scheduler.Schedulers;
+import reactor.util.context.Context;
 import reactor.util.retry.Retry;
 
 import java.nio.file.Path;
@@ -2030,6 +2031,112 @@ public class ReactiveSec1Application {
 		/*
 			Now sub3 only gonna see 'msg3' and 'msg4'
 		 */
+	}
+
+    private static Mono<String> getWelcomeMessage() {
+		return Mono.fromSupplier(()->"WELCOME");
+		/*
+			What if the business requirement says that only authenticated users
+			should invoke the getWelcomeMessage() method, without changing the
+			the method signature? If so check the next methods
+		 */
+	}
+
+	public static void context(){
+		getWelcomeMessage()
+				.contextWrite(Context.of("a","b"))
+				.subscribe(Util.subscriber());
+
+		/*
+			This will print
+			Context{a=b}
+			Anonymous Received Welcome
+			Anonymous Received Complete
+		 */
+	}
+
+	private static Mono<String> getWelcomeMessage1() {
+		return Mono.deferContextual(ctx->
+				Mono.fromSupplier(()->"Welcome"));
+
+	}
+	public static void context1(){
+		getWelcomeMessage()
+				.contextWrite(Context.of("a","b")) // will throw error
+		//		.contextWrite(Context.of("user","sam")) // will work
+				.subscribe(Util.subscriber());
+
+		/*
+			This will print
+			runtime exception unauthenticated user
+		 */
+	}
+
+	private static Mono<String> getWelcomeMessage2() {
+		return Mono.deferContextual(ctx->{
+			if(ctx.hasKey("user")) return Mono.fromSupplier(()->"Welcome: " + ctx.get("user"));
+			else return Mono.error(new RuntimeException("UNAUTHENTICATED USER"));
+				}
+
+				);
+
+	}
+
+	public static void context2(){
+		getWelcomeMessage()
+				.contextWrite(Context.of("a","b")) //Now context{user=sam,a=b}
+				.contextWrite(Context.of("user","sam"))
+				.subscribe(Util.subscriber());
+
+	}
+	/*
+		The above and below methods are the same
+	 */
+
+	public static void context3(){
+		getWelcomeMessage()
+				.contextWrite(Context.of("user","sam").put("a","b")) //Now context{user=sam,a=b}
+				.subscribe(Util.subscriber());
+
+	}
+
+	public static void contextUpdate(){
+		getWelcomeMessage()
+				.contextWrite(ctx->Context.empty()) //Now you've removed everything
+				.contextWrite(Context.of("user","sam").put("a","b")) //Now context{user=sam,a=b}
+				.subscribe(Util.subscriber());
+
+		getWelcomeMessage()
+				.contextWrite(ctx->Context.of("user","mike")) //Now The key user no longer has value of sam but rather value of mike
+				.contextWrite(Context.of("user","sam").put("a","b")) //Now context{user=sam,a=b}
+				.subscribe(Util.subscriber());
+
+		getWelcomeMessage()
+				.contextWrite(ctx->ctx.delete("a")) //will delete the key a, so Context{user=sam}
+				.contextWrite(Context.of("user","sam").put("a","b")) //Now context{user=sam,a=b}
+				.subscribe(Util.subscriber());
+
+	}
+
+	public static void contextPropagation(){
+		var producer1 = Mono.<String>deferContextual(ctx -> {
+			log.info("CONTEXT: {}",ctx);
+			return Mono.empty();
+		}).subscribeOn(Schedulers.boundedElastic());
+
+		var producer2 = Mono.<String>deferContextual(ctx -> {
+			log.info("CONTEXT: {}",ctx);
+			return Mono.empty();
+		}).subscribeOn(Schedulers.parallel());
+
+		getWelcomeMessage()
+				.concatWith(producer1)// producer1 will see the Context{user=sam}
+			//	.concatWith(Flux.merge(producer2,producer1)) // Now both producer1 and producer2 will see the context
+			// .concatWith(Flux.merge(producer2,producer1.contextWrite(ctx->Context.empty()))) //producer1 will see an empty context
+				.contextWrite(Context.of("user","sam")) //Now context{user=sam,a=b}
+				.subscribe(Util.subscriber());
+
+		Util.sleepThread(2);
 	}
 
 
