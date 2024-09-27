@@ -20,10 +20,7 @@ import com.example.reactive_sec1.subscriber.SubscriberImpl;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.FluxSink;
-import reactor.core.publisher.GroupedFlux;
-import reactor.core.publisher.Mono;
+import reactor.core.publisher.*;
 import reactor.core.scheduler.Schedulers;
 import reactor.util.retry.Retry;
 
@@ -44,7 +41,7 @@ public class ReactiveSec1Application {
 
 	public static void main(String[] args) throws InterruptedException {
 		SpringApplication.run(ReactiveSec1Application.class, args);
-		new com.example.reactive_sec1.assignments.assignment6.mine.OrderService().createOrderFlux();
+		sinkMany_multicast();
 	}
 
 	private static void demo1(){
@@ -1738,7 +1735,305 @@ public class ReactiveSec1Application {
 				.subscribe(sub);
 	}
 
-	
+	public static void sinkOne_TryEmitValue(){
+		/*
+			I can emit values without having subs with sinks
+		 */
+		var sink = Sinks.one();
+		sink.tryEmitValue("Hi");
+		var mono = sink.asMono();
+		mono.subscribe(Util.subscriber());
+	}
+
+	public static void sinkOne_TryEmitEmpty(){
+		var sink = Sinks.one();
+		sink.tryEmitEmpty();
+		var mono = sink.asMono();
+		mono.subscribe(Util.subscriber());
+	}
+
+	public static void sinkOne_TryEmitError(){
+		var sink = Sinks.one();
+		sink.tryEmitError(new RuntimeException("oops"));
+		var mono = sink.asMono();
+		mono.subscribe(Util.subscriber());
+	}
+
+	public static void sinkOne_multipleSubscribers(){
+		var sink = Sinks.one();
+		sink.tryEmitValue("Hi");
+		var mono = sink.asMono();
+		mono.subscribe(Util.subscriber("sub1"));
+		mono.subscribe(Util.subscriber("sub2"));
+	}
+
+	public static void sinkOne_FailureHandler(){
+		var sink = Sinks.one();
+		sink.tryEmitValue("Hi"); //It will merely try to emit values, in case of issues, it won't notify us
+		var mono = sink.asMono();
+		mono.subscribe(Util.subscriber("sub1"));
+
+		/*
+			since sink type is One().
+			And since sinks already emitted one value, it will face issues
+			when requested to emit another one like it will next statements.
+
+		 */
+		sink.emitValue("HELLO",((signalType, emitResult) -> {
+			log.info(signalType.toString());
+			log.info(emitResult.toString());
+			return false; // here the sink won't retry, if it was set to true, it will. but would never work as it already emitted a value
+		}));
+	}
+
+	public static void sinkMany_unicast(){
+		// handle through which we would push items
+		// onBackPressureBuffer - unbounded queue
+		var sink = Sinks.many().unicast().onBackpressureBuffer();
+		var flux = sink.asFlux();
+		sink.tryEmitNext("Hi");
+		sink.tryEmitNext("HELLO");
+		sink.tryEmitNext("HELLO");
+		flux.subscribe(Util.subscriber());
+
+		/*
+			With sink unicast, we can emit many values,
+			we can have ONE sub at most!
+		 */
+	}
+
+	public static void sink_ThreadSafety(){
+		var sink = Sinks.many().unicast().onBackpressureBuffer();
+		var flux = sink.asFlux();
+		var list = new ArrayList<>();
+		flux.subscribe(list::add);
+		for(int i=0;i<1000;i++){
+			var j = i;
+			CompletableFuture.runAsync(()->{
+				sink.tryEmitNext(j);
+			});
+		}
+		Util.sleepThread(10);
+		log.info("LIST SIZE: {}", list.size()); // it won't print 999
+	}
+	public static void sink_ThreadSafety1(){
+		var sink = Sinks.many().unicast().onBackpressureBuffer();
+		var flux = sink.asFlux();
+		var list = new ArrayList<>();
+		flux.subscribe(list::add);
+		for(int i=0;i<1000;i++){
+			var j = i;
+			CompletableFuture.runAsync(()->{
+				sink.emitNext(j,((signalType, emitResult) -> {
+					return Sinks.EmitResult.FAIL_NON_SERIALIZED.equals(emitResult);
+				}));
+			});
+		}
+		Util.sleepThread(10);
+			log.info("LIST SIZE: {}", list.size()); // it WILL print 999
+	}
+
+	public static void sinkMany_multicast(){
+		// handle through which we would push items
+		// onBackPressureBuffer - bounded queue
+		var sink = Sinks.many().multicast().onBackpressureBuffer();
+		var flux = sink.asFlux();
+		flux.subscribe(Util.subscriber("sub1"));
+		flux.subscribe(Util.subscriber("sub2"));
+
+		sink.tryEmitNext("Hi");
+		sink.tryEmitNext("HELLO");
+		sink.tryEmitNext("HELLO");
+
+		Util.sleepThread(10);
+
+		flux.subscribe(Util.subscriber("sub3"));
+
+		sink.tryEmitNext("new Message");
+		/*
+			With sink multicast, we can emit many values,
+			we can have more subs.
+			if a sub joins late, won't be able to see the missed message.
+			Here both sub1 and sub2 will receive all the messages
+			Sub3 will only receive the 'new message', won't be able
+			to see past messages
+		 */
+	}
+
+	public static void sinkMany_multicast2(){
+		// handle through which we would push items
+		// onBackPressureBuffer - bounded queue
+		var sink = Sinks.many().multicast().onBackpressureBuffer();
+		var flux = sink.asFlux();
+
+		sink.tryEmitNext("Hi");
+		sink.tryEmitNext("HELLO");
+		sink.tryEmitNext("HELLO");
+		Util.sleepThread(10);
+
+		flux.subscribe(Util.subscriber("sub1"));
+		flux.subscribe(Util.subscriber("sub2"));
+		flux.subscribe(Util.subscriber("sub3"));
+		sink.tryEmitNext("new Message");
+		/*
+			Here only sub1 who's gonna receive all the messages
+			sub2 and sub3 will only receive 'new message'
+		 */
+	}
+
+	private static void sinkMany_multicast3() {
+
+		System.setProperty("reactor.bufferSize.small", "16");
+
+		// handle through which we would push items
+		// onBackPressureBuffer - bounded queue
+		var sink = Sinks.many().multicast().onBackpressureBuffer();//sam will recieve SOME of the mssages, not ALL
+
+		// handle through which subscribers will receive items
+		var flux = sink.asFlux();
+
+		flux.subscribe(Util.subscriber("sam"));
+		flux.delayElements(Duration.ofMillis(200)).subscribe(Util.subscriber("mike"));
+
+		/*
+			Here sam won't receive ALL the messages, because the other sub is slow
+			With multicast().onBackpressureBuffer(), the performance of slow sub affect the performance
+			of the fast sub
+		 */
+
+		for (int i = 1; i <= 100; i++) {
+			var result = sink.tryEmitNext(i);
+			log.info("item: {}, result: {}", i, result);
+		}
+	}
+
+		private static void sinkMany_multicast4() {
+
+			System.setProperty("reactor.bufferSize.small", "16");
+
+			// handle through which we would push items
+			// onBackPressureBuffer - bounded queue
+			var sink = Sinks.many().multicast().directBestEffort(); // sam will receive all the messages
+
+			// handle through which subscribers will receive items
+			var flux = sink.asFlux();
+
+			flux.subscribe(Util.subscriber("sam"));
+			flux.delayElements(Duration.ofMillis(200)).subscribe(Util.subscriber("mike"));
+
+		/*
+			Now Sam will receive ALL the messages, while mike is gonna be ignored
+			the sink here will focus on the fast sub only
+			If you want mike to the receive the messages as well, see nextMethod
+		 */
+
+			for (int i = 1; i <= 100; i++) {
+				var result = sink.tryEmitNext(i);
+				log.info("item: {}, result: {}", i, result);
+			}
+		}
+
+	private static void sinkMany_multicast5() {
+
+		System.setProperty("reactor.bufferSize.small", "16");
+
+		// handle through which we would push items
+		// onBackPressureBuffer - bounded queue
+		var sink = Sinks.many().multicast().directBestEffort();
+
+		// handle through which subscribers will receive items
+		var flux = sink.asFlux();
+
+		flux.subscribe(Util.subscriber("sam"));
+		flux
+				.onBackpressureBuffer() // telling the sink, "I am a slow sub"
+				.delayElements(Duration.ofMillis(200)).subscribe(Util.subscriber("mike"));
+
+		/*
+			Now both sam and mike will receive the messages
+		 */
+
+		for (int i = 1; i <= 100; i++) {
+			var result = sink.tryEmitNext(i);
+			log.info("item: {}, result: {}", i, result);
+		}
+	}
+
+	private static void sinkMany_multicast6() {
+
+		System.setProperty("reactor.bufferSize.small", "16");
+
+		// handle through which we would push items
+		// onBackPressureBuffer - bounded queue
+		var sink = Sinks.many().multicast().directAllOrNothing(); // if a sub is slow, don't deliver to anyone!
+
+		// handle through which subscribers will receive items
+		var flux = sink.asFlux();
+
+		flux.subscribe(Util.subscriber("sam"));
+		flux.delayElements(Duration.ofMillis(200)).subscribe(Util.subscriber("mike"));
+
+		/*
+			Here both sam and mike won't receive any messages, since one of them is slow
+		 */
+
+		for (int i = 1; i <= 100; i++) {
+			var result = sink.tryEmitNext(i);
+			log.info("item: {}, result: {}", i, result);
+		}
+	}
+
+	public static void sinkMany_replay(){
+		// handle through which we would push items
+		// onBackPressureBuffer - bounded queue
+		var sink = Sinks.many().replay().all();
+		var flux = sink.asFlux();
+		flux.subscribe(Util.subscriber("sub1"));
+		flux.subscribe(Util.subscriber("sub2"));
+
+		sink.tryEmitNext("Hi");
+		sink.tryEmitNext("HELLO");
+		sink.tryEmitNext("HELLO");
+
+		Util.sleepThread(10);
+
+		flux.subscribe(Util.subscriber("sub3"));
+
+		sink.tryEmitNext("new Message");
+		/*
+			With sink replay, we can emit many values,
+			we can have more subs.
+			ALL subs will receive ALL the messages, be it early subs or past ones
+			Sometimes you requirement requires the late sub should be able to see
+			only the last 2 messages or messages of the last 2 minutes
+			if so, see next method
+		 */
+	}
+
+	public static void sinkMany_replay2(){
+		// handle through which we would push items
+		// onBackPressureBuffer - bounded queue
+		var sink = Sinks.many().replay().limit(1);
+		var flux = sink.asFlux();
+		flux.subscribe(Util.subscriber("sub1"));
+		flux.subscribe(Util.subscriber("sub2"));
+
+		sink.tryEmitNext("msg1");
+		sink.tryEmitNext("msg2");
+		sink.tryEmitNext("msg3");
+
+		Util.sleepThread(10);
+
+		flux.subscribe(Util.subscriber("sub3"));
+
+		sink.tryEmitNext("msg4");
+		/*
+			Now sub3 only gonna see 'msg3' and 'msg4'
+		 */
+	}
+
+
+
 
 
 }
